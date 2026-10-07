@@ -14,7 +14,7 @@ IMAGE_SECTORS := 2880
 CFLAGS := -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -ffreestanding -nostdlib \
           -fno-stack-protector -fno-pic -mno-red-zone -m64
 
-all: $(BUILD)/hadeed.img $(BUILD)/m2_image_test
+all: $(BUILD)/hadeed.img $(BUILD)/m2_image_test $(BUILD)/m2_trace_verify
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -74,6 +74,15 @@ $(BUILD)/m2_image_test.o: tests/m2_image_test.c | $(BUILD)
 $(BUILD)/m2_image_test: $(BUILD)/m2_image_test.o tests/host_linker.ld
 	$(LD) -m elf_x86_64 -nostdlib -T tests/host_linker.ld -o $@ $(BUILD)/m2_image_test.o
 
+$(BUILD)/m2_trace_verify.o: tests/m2_trace_verify.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/m2_trace_verify: $(BUILD)/m2_trace_verify.o tests/host_linker.ld
+	$(LD) -m elf_x86_64 -nostdlib -T tests/host_linker.ld -o $@ $(BUILD)/m2_trace_verify.o
+
+trace-verify: $(BUILD)/hadeed.img $(BUILD)/kernel.elf $(BUILD)/m2_trace_verify
+	./$(BUILD)/m2_trace_verify
+
 static-test: $(BUILD)/hadeed.img $(BUILD)/m2_image_test
 	./$(BUILD)/m2_image_test
 
@@ -104,4 +113,4 @@ run: $(BUILD)/hadeed.img
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all static-test runtime-test check run clean
+.PHONY: all trace-verify static-test runtime-test check run clean
