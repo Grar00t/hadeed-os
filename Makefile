@@ -12,9 +12,17 @@ KERNEL_LBA := 9
 IMAGE_SECTORS := 2880
 
 CFLAGS := -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -ffreestanding -nostdlib \
-          -fno-stack-protector -fno-pic -mno-red-zone -m64
+          -fno-stack-protector -fno-pic -mno-red-zone -m64 -mgeneral-regs-only
 
-all: $(BUILD)/hadeed.img $(BUILD)/m2_image_test $(BUILD)/m2_trace_verify
+KERNEL_OBJS := \
+	$(BUILD)/kernel_entry.o \
+	$(BUILD)/kernel_isr.o \
+	$(BUILD)/kernel_main.o \
+	$(BUILD)/kernel_idt.o \
+	$(BUILD)/kernel_pic.o \
+	$(BUILD)/kernel_pit.o
+
+all: $(BUILD)/hadeed.img $(BUILD)/m2_image_test $(BUILD)/m2_trace_verify $(BUILD)/m3_trace_verify
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -22,11 +30,23 @@ $(BUILD):
 $(BUILD)/kernel_entry.o: kernel/entry.asm | $(BUILD)
 	$(AS) --64 $< -o $@
 
+$(BUILD)/kernel_isr.o: kernel/isr.asm | $(BUILD)
+	$(AS) --64 $< -o $@
+
 $(BUILD)/kernel_main.o: kernel/main.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/kernel.elf: $(BUILD)/kernel_entry.o $(BUILD)/kernel_main.o kernel/linker.ld
-	$(LD) -m elf_x86_64 -nostdlib -T kernel/linker.ld -o $@ $(BUILD)/kernel_entry.o $(BUILD)/kernel_main.o
+$(BUILD)/kernel_idt.o: kernel/idt.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kernel_pic.o: kernel/pic.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kernel_pit.o: kernel/pit.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld
+	$(LD) -m elf_x86_64 -nostdlib -T kernel/linker.ld -o $@ $(KERNEL_OBJS)
 
 $(BUILD)/kernel.bin: $(BUILD)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
@@ -80,32 +100,60 @@ $(BUILD)/m2_trace_verify.o: tests/m2_trace_verify.c | $(BUILD)
 $(BUILD)/m2_trace_verify: $(BUILD)/m2_trace_verify.o tests/host_linker.ld
 	$(LD) -m elf_x86_64 -nostdlib -T tests/host_linker.ld -o $@ $(BUILD)/m2_trace_verify.o
 
+$(BUILD)/m3_trace_verify.o: tests/m3_trace_verify.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/m3_trace_verify: $(BUILD)/m3_trace_verify.o tests/host_linker.ld
+	$(LD) -m elf_x86_64 -nostdlib -T tests/host_linker.ld -o $@ $(BUILD)/m3_trace_verify.o
+
 trace-verify: $(BUILD)/hadeed.img $(BUILD)/kernel.elf $(BUILD)/m2_trace_verify
 	./$(BUILD)/m2_trace_verify
 
 static-test: $(BUILD)/hadeed.img $(BUILD)/m2_image_test
 	./$(BUILD)/m2_image_test
 
-runtime-test: $(BUILD)/hadeed.img
-	rm -f $(BUILD)/m2.debug $(BUILD)/m2.expected $(BUILD)/qemu.log
-	printf 'LM64\n' > $(BUILD)/m2.expected
-	@set +e; \
-	$(TIMEOUT) 2s $(QEMU) \
-	  -machine pc,accel=tcg \
-	  -m 64M \
-	  -drive format=raw,file=$(BUILD)/hadeed.img,if=ide,index=0,media=disk \
-	  -boot c \
-	  -display none -serial none -monitor none \
-	  -debugcon file:$(BUILD)/m2.debug -global isa-debugcon.iobase=0xe9 \
-	  -d int,cpu_reset -D $(BUILD)/qemu.log \
-	  -no-reboot -no-shutdown; \
-	rc=$$?; set -e; \
-	test $$rc -eq 124
-	cmp $(BUILD)/m2.expected $(BUILD)/m2.debug
-	! grep -Eiq 'triple fault' $(BUILD)/qemu.log
-	printf '%s\n' 'M2_RUNTIME_PASS'
+m3-trace-verify: $(BUILD)/hadeed.img $(BUILD)/kernel.elf $(BUILD)/m3_trace_verify
+	./$(BUILD)/m3_trace_verify
 
-check: static-test runtime-test
+
+m3-static-test: $(BUILD)/hadeed.img $(BUILD)/m2_image_test $(BUILD)/m3_trace_verify
+	./$(BUILD)/m2_image_test
+	./$(BUILD)/m3_trace_verify
+	printf '%s\n' 'M3_STATIC_PASS'
+
+
+m3-runtime-test: $(BUILD)/hadeed.img $(BUILD)/m3_trace_verify
+	@set -e; \
+	if ! command -v $(QEMU) >/dev/null 2>&1; then \
+	  printf '%s\n' 'M3_RUNTIME_QEMU_ABSENT_TRACE_USED'; \
+	  ./$(BUILD)/m3_trace_verify; \
+	else \
+	  rm -f $(BUILD)/m3.debug $(BUILD)/m3.expected $(BUILD)/m3.qemu.log; \
+	  printf 'LM64\nTICK 100\nTICK 200\nTICK 300\nM3 OK\n' > $(BUILD)/m3.expected; \
+	  set +e; \
+	  $(TIMEOUT) 5s $(QEMU) \
+	    -machine pc,accel=tcg \
+	    -m 64M \
+	    -drive format=raw,file=$(BUILD)/hadeed.img,if=ide,index=0,media=disk \
+	    -boot c \
+	    -display none -serial none -monitor none \
+	    -debugcon file:$(BUILD)/m3.debug -global isa-debugcon.iobase=0xe9 \
+	    -d int,cpu_reset -D $(BUILD)/m3.qemu.log \
+	    -no-reboot -no-shutdown; \
+	  rc=$$?; set -e; \
+	  test $$rc -eq 124; \
+	  cmp $(BUILD)/m3.expected $(BUILD)/m3.debug; \
+	  ! grep -Eiq 'triple fault' $(BUILD)/m3.qemu.log; \
+	  printf '%s\n' 'M3_RUNTIME_PASS'; \
+	fi
+
+
+m3-all: m3-trace-verify m3-static-test m3-runtime-test
+
+
+runtime-test: m3-runtime-test
+
+check: static-test m3-trace-verify m3-runtime-test
 
 run: $(BUILD)/hadeed.img
 	./scripts/run-qemu.sh $(BUILD)/hadeed.img
@@ -113,4 +161,4 @@ run: $(BUILD)/hadeed.img
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all trace-verify static-test runtime-test check run clean
+.PHONY: all trace-verify static-test m3-trace-verify m3-static-test m3-runtime-test m3-all runtime-test check run clean
