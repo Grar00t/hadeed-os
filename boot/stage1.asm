@@ -1,14 +1,19 @@
-/* Hadeed M2 stage1: load flat kernel, enable A20, build identity paging, enter IA-32e. */
+/* Hadeed M4 stage1: E820 map, flat-kernel load, A20, identity paging, IA-32e. */
 .code16
 .section .text
 .global stage1
 
-.set PML4_ADDR, 0x9000
-.set PDPT_ADDR, 0xa000
-.set PD_ADDR,   0xb000
-.set KERNEL_BOUNCE, 0x10000
-.set KERNEL_PHYS,   0x100000
-.set KERNEL_LBA,    9
+.set E820_INFO,      0x5000
+.set E820_ENTRIES,   0x5010
+.set E820_ENTRY_SIZE, 24
+.set E820_MAX,       128
+.set E820_SMAP,      0x534d4150
+.set PML4_ADDR,      0x9000
+.set PDPT_ADDR,      0xa000
+.set PD_ADDR,        0xb000
+.set KERNEL_BOUNCE,  0x10000
+.set KERNEL_PHYS,    0x100000
+.set KERNEL_LBA,     9
 
 stage1:
     cli
@@ -20,6 +25,53 @@ stage1:
     cld
     movb %dl, boot_drive
 
+    /* BIOS E820: write fixed-size 24-byte entries at 0000:5010. */
+    movl $0, E820_INFO
+    movl $E820_ENTRY_SIZE, E820_INFO + 4
+    movl $0, E820_INFO + 8
+    movl $0, E820_INFO + 12
+    xorl %ebx, %ebx
+    movw $E820_ENTRIES, %di
+
+e820_next:
+    movl $1, 20(%di)
+    movl $0xe820, %eax
+    movl $E820_SMAP, %edx
+    movl $E820_ENTRY_SIZE, %ecx
+    int $0x15
+    jc e820_done_or_error
+    cmpl $E820_SMAP, %eax
+    jne e820_error
+    cmpl $20, %ecx
+    jb e820_error
+    incl E820_INFO
+    addw $E820_ENTRY_SIZE, %di
+    cmpl $E820_MAX, E820_INFO
+    jae e820_done
+    testl %ebx, %ebx
+    jne e820_next
+
+e820_done:
+    cmpl $0, E820_INFO
+    je e820_error
+    jmp e820_ready
+
+e820_done_or_error:
+    cmpl $0, E820_INFO
+    je e820_error
+    jmp e820_done
+
+e820_error:
+    movb $'E', %al
+    outb %al, $0xe9
+    movb $'\n', %al
+    outb %al, $0xe9
+1:
+    hlt
+    jmp 1b
+
+e820_ready:
+    movb boot_drive, %dl
     movw $kernel_dap, %si
     movb $0x42, %ah
     int $0x13
@@ -71,9 +123,9 @@ disk_error:
     outb %al, $0xe9
     movb $'\n', %al
     outb %al, $0xe9
-1:
+2:
     hlt
-    jmp 1b
+    jmp 2b
 
 .align 8
 gdt:
