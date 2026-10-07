@@ -1,0 +1,18 @@
+build/
+*.o
+*.elf
+*.bin
+*.img
+*.iso
+*.map
+*.lst
+*.d
+*.qcow2
+
+# Debug/editor
+core
+core.*
+.vscode/
+.idea/
+*.swp
+compile_commands.json
