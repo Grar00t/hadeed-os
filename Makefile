@@ -20,9 +20,11 @@ KERNEL_OBJS := \
 	$(BUILD)/kernel_main.o \
 	$(BUILD)/kernel_idt.o \
 	$(BUILD)/kernel_pic.o \
-	$(BUILD)/kernel_pit.o
+	$(BUILD)/kernel_pit.o \
+	$(BUILD)/kernel_memory.o \
+	$(BUILD)/kernel_heap.o
 
-all: $(BUILD)/hadeed.img $(BUILD)/m2_image_test $(BUILD)/m2_trace_verify $(BUILD)/m3_trace_verify
+all: $(BUILD)/hadeed.img $(BUILD)/m2_image_test $(BUILD)/m2_trace_verify $(BUILD)/m3_trace_verify $(BUILD)/m4_trace_verify
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -33,7 +35,7 @@ $(BUILD)/kernel_entry.o: kernel/entry.asm | $(BUILD)
 $(BUILD)/kernel_isr.o: kernel/isr.asm | $(BUILD)
 	$(AS) --64 $< -o $@
 
-$(BUILD)/kernel_main.o: kernel/main.c | $(BUILD)
+$(BUILD)/kernel_main.o: kernel/main.c kernel/memory.h kernel/heap.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/kernel_idt.o: kernel/idt.c | $(BUILD)
@@ -43,6 +45,12 @@ $(BUILD)/kernel_pic.o: kernel/pic.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/kernel_pit.o: kernel/pit.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kernel_memory.o: kernel/memory.c kernel/memory.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kernel_heap.o: kernel/heap.c kernel/heap.h kernel/memory.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/kernel.elf: $(KERNEL_OBJS) kernel/linker.ld
@@ -106,6 +114,12 @@ $(BUILD)/m3_trace_verify.o: tests/m3_trace_verify.c | $(BUILD)
 $(BUILD)/m3_trace_verify: $(BUILD)/m3_trace_verify.o tests/host_linker.ld
 	$(LD) -m elf_x86_64 -nostdlib -T tests/host_linker.ld -o $@ $(BUILD)/m3_trace_verify.o
 
+$(BUILD)/m4_trace_verify.o: tests/m4_trace_verify.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/m4_trace_verify: $(BUILD)/m4_trace_verify.o tests/host_linker.ld
+	$(LD) -m elf_x86_64 -nostdlib -T tests/host_linker.ld -o $@ $(BUILD)/m4_trace_verify.o
+
 trace-verify: $(BUILD)/hadeed.img $(BUILD)/kernel.elf $(BUILD)/m2_trace_verify
 	./$(BUILD)/m2_trace_verify
 
@@ -151,9 +165,57 @@ m3-runtime-test: $(BUILD)/hadeed.img $(BUILD)/m3_trace_verify
 m3-all: m3-trace-verify m3-static-test m3-runtime-test
 
 
-runtime-test: m3-runtime-test
+m4-trace-verify: $(BUILD)/hadeed.img $(BUILD)/kernel.elf $(BUILD)/m4_trace_verify
+	./$(BUILD)/m4_trace_verify
 
-check: static-test m3-trace-verify m3-runtime-test
+m4-mutation-test: m4-trace-verify
+	@set -e; \
+	cp $(BUILD)/kernel.bin $(BUILD)/kernel.bin.good; \
+	off=$(grep -abo 'M4 OK' $(BUILD)/kernel.bin | head -n 1 | cut -d: -f1); \
+	test -n "$off"; \
+	printf 'X' | dd of=$(BUILD)/kernel.bin bs=1 seek=$off conv=notrunc status=none; \
+	if ./$(BUILD)/m4_trace_verify >$(BUILD)/m4.mutation.out 2>&1; then \
+	  mv $(BUILD)/kernel.bin.good $(BUILD)/kernel.bin; \
+	  printf '%s\n' 'M4_MUTATION_FAIL verifier accepted corrupted marker'; exit 1; \
+	fi; \
+	mv $(BUILD)/kernel.bin.good $(BUILD)/kernel.bin; \
+	./$(BUILD)/m4_trace_verify; \
+	printf '%s\n' 'M4_MUTATION_PASS'
+
+m4-static-test: m4-trace-verify m4-mutation-test
+	printf '%s\n' 'M4_STATIC_PASS'
+
+m4-runtime-test: $(BUILD)/hadeed.img $(BUILD)/m4_trace_verify
+	@set -e; \
+	if ! command -v $(QEMU) >/dev/null 2>&1; then \
+	  printf '%s\n' 'M4_RUNTIME_QEMU_ABSENT_TRACE_USED'; \
+	  ./$(BUILD)/m4_trace_verify; \
+	else \
+	  rm -f $(BUILD)/m4.debug $(BUILD)/m4.qemu.log; \
+	  set +e; \
+	  $(TIMEOUT) 5s $(QEMU) \
+	    -machine pc,accel=tcg \
+	    -m 64M \
+	    -drive format=raw,file=$(BUILD)/hadeed.img,if=ide,index=0,media=disk \
+	    -boot c \
+	    -display none -serial none -monitor none \
+	    -debugcon file:$(BUILD)/m4.debug -global isa-debugcon.iobase=0xe9 \
+	    -d int,cpu_reset -D $(BUILD)/m4.qemu.log \
+	    -no-reboot -no-shutdown; \
+	  rc=$?; set -e; \
+	  test $rc -eq 124; \
+	  grep -Eq '^LM64$' $(BUILD)/m4.debug; \
+	  grep -Eq '^USABLE_PAGES [0-9]+$' $(BUILD)/m4.debug; \
+	  test "$(tail -n 1 $(BUILD)/m4.debug)" = 'M4 OK'; \
+	  ! grep -Eiq 'triple fault' $(BUILD)/m4.qemu.log; \
+	  printf '%s\n' 'M4_RUNTIME_PASS'; \
+	fi
+
+m4-all: m4-static-test m4-runtime-test
+
+runtime-test: m4-runtime-test
+
+check: m4-all
 
 run: $(BUILD)/hadeed.img
 	./scripts/run-qemu.sh $(BUILD)/hadeed.img
@@ -161,4 +223,4 @@ run: $(BUILD)/hadeed.img
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all trace-verify static-test m3-trace-verify m3-static-test m3-runtime-test m3-all runtime-test check run clean
+.PHONY: all trace-verify static-test m3-trace-verify m3-static-test m3-runtime-test m3-all m4-trace-verify m4-mutation-test m4-static-test m4-runtime-test m4-all runtime-test check run clean
