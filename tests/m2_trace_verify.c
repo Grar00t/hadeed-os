@@ -286,8 +286,8 @@ static void verify_elf_rodata(usize elf_len, usize kernel_len, u64 *debug_addr, 
             if (dpos < 0 || bpos < 0) fail(66L, "required rodata strings missing");
             *debug_addr = addr + (u64)dpos;
             *banner_addr = addr + (u64)bpos;
-            trace("kernel.rodata.debug", *debug_addr, 0x4c4d36340aUL, "kernel/main.c:8-9");
-            trace("kernel.rodata.banner", *banner_addr, 0x4841444545443634UL, "kernel/main.c:5-6");
+            trace("kernel.rodata.debug", *debug_addr, 0x4c4d36340aUL, "kernel/main.c:15-16");
+            trace("kernel.rodata.banner", *banner_addr, 0x4841444545443634UL, "kernel/main.c:12-13");
             return;
         }
     }
@@ -431,8 +431,8 @@ void _start(void)
         }
         if (vga_stores < 8U) fail(52L, "kmain VGA writes missing");
         if (debug_outs < 1U) fail(53L, "debugcon out 0xe9 missing");
-        trace("kernel.kmain.vga", 0x000b8000UL, vga_stores, "kernel/main.c:24-32");
-        trace("kernel.kmain.debugcon", 0x000000e9UL, debug_outs, "kernel/main.c:11-21,34");
+        trace("kernel.kmain.vga", 0x000b8000UL, vga_stores, "kernel/main.c:65-75");
+        trace("kernel.kmain.debugcon", 0x000000e9UL, debug_outs, "kernel/main.c:24-35,75");
     }
 
     elf_fd = open_ro(ELF_PATH);
@@ -447,7 +447,7 @@ void _start(void)
         for (i = 0; i + 5UL <= kernel_len; ++i) {
             if (kernel[i] == 0xbaU && (u64)rd32(kernel + i + 1UL) == debug_addr) {
                 referenced = 1;
-                trace("kernel.debug_string_reference", KERNEL_PHYS + i, debug_addr, "kernel/main.c:16-21,34");
+                trace("kernel.debug_string_reference", KERNEL_PHYS + i, debug_addr, "kernel/main.c:29-35,75");
                 break;
             }
         }

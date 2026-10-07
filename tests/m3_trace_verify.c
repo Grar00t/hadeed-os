@@ -354,7 +354,7 @@ static void verify_idt_and_stubs(void)
         }
     }
     if (!trap_attr_seen || !irq_attr_seen) fail(49L, "IDT trap/interrupt gate attributes not referenced");
-    trace("idt.physical", idt.value, idt.size, "kernel/linker.ld:30-35");
+    trace("idt.physical", idt.value, idt.size, "kernel/linker.ld:36-41");
     trace("idt.gate_types", install.value, 0x0000000000008e8fUL, "kernel/idt.c:77-95");
 
     for (v = 32U; v <= 47U; ++v) {
