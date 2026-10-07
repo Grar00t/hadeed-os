@@ -4,7 +4,7 @@ LD   ?= x86_64-elf-ld
 QEMU ?= qemu-system-x86_64
 
 BUILD := build
-CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
+CFLAGS := -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -ffreestanding -fno-stack-protector \
           -fno-pic -mno-red-zone -mcmodel=kernel
 LDFLAGS := -T kernel/linker.ld -nostdlib
 
