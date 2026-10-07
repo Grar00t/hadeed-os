@@ -1,18 +1,16 @@
-; Hadeed stage-1 kernel entry. NASM syntax; entered in 64-bit mode by boot/loader.
-bits 64
-default rel
-section .text
-extern kmain
-global kernel_entry
+/* Hadeed M2 64-bit kernel entry. GNU as syntax. */
+.code64
+.section .text.entry,"ax",@progbits
+.global kernel_entry
+.type kernel_entry, @function
+.extern kmain
+
 kernel_entry:
     cli
-    lea rsp, [stack_top]
-    xor rbp, rbp
+    movq $0x80000, %rsp
+    xorq %rbp, %rbp
     call kmain
-.hang:
+1:
     hlt
-    jmp .hang
-section .bss
-align 16
-stack_bottom: resb 16384
-stack_top:
+    jmp 1b
+.size kernel_entry, . - kernel_entry

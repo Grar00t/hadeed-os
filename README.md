@@ -1,71 +1,83 @@
 # Hadeed
 
-x86-64 OS from sector 0. Custom bootloader. No GRUB. No libc.
+x86-64 OS boot path from sector 0. No GRUB. No libc. No hosted runtime in the target image.
 
-## Current state
+## Current milestone: M2
 
-M1 is the committed target: a 512-byte NASM MBR boot sector clears VGA text mode, writes `HADEED`, and halts. It is an executable sector-0 artifact, not yet a kernel loader. The kernel entry/C/linker files are the M2 input skeleton; they are not included in the current image until the stage1 loader exists.
+The raw image now contains three executable layers:
 
-The requested Arabic word `حديد` cannot be rendered by a stock VGA ROM text font: VGA text mode displays one 8-bit glyph index per cell and does not provide Arabic glyphs or shaping. The current sector therefore displays ASCII `HADEED`. M2 installs a project-supplied 8×16 glyph table and renders pre-shaped glyph cells if Arabic text remains required.
+1. LBA 0: a 512-byte BIOS boot sector at `0x7c00`.
+2. LBA 1-8: stage1 loaded at `0x8000`.
+3. LBA 9+: a flat kernel payload linked for physical `0x00100000`.
 
-## Toolchain
+Stage1 loads the kernel into a low-memory bounce buffer, enables A20, creates a 0..2 MiB identity map with one 2 MiB page, enables `CR4.PAE`, loads `CR3`, sets `IA32_EFER.LME`, sets `CR0.PE|PG`, then far-jumps through a 64-bit code descriptor. In 64-bit mode it copies the flat kernel to `0x00100000` and jumps to `kernel_entry`.
 
-The host build uses these command-line tools:
+The kernel writes `HADEED64` to VGA text memory and writes the exact debug-port bytes `LM64\n` to I/O port `0xe9`, then halts.
 
-- `nasm` to assemble the boot sector and kernel assembly.
-- `make` to run the declared build graph.
-- `qemu-system-x86_64` to run the raw disk image.
-- `x86_64-elf-gcc` and `x86_64-elf-ld` for later kernel stages.
+## Build
 
-The current M1 target only needs `nasm`, `make`, `dd`, `od`, `tail`, `tr`, and QEMU. The image is a raw 1.44 MiB disk image with sector 0 occupied by the MBR. No libc or external bootloader is used by the image.
-
-## Build and run
+Required host commands: `make`, `gcc`, GNU `as`, GNU `ld`, `objcopy`, `dd`, `od`, `tail`, `tr`.
 
 ```sh
+make clean
 make
-./scripts/run-qemu.sh build/hadeed.img
-# equivalent:
+make static-test
+```
+
+Expected static acceptance output:
+
+```text
+M2_STATIC_PASS
+```
+
+The C translation units are built with:
+
+```text
+-std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -ffreestanding -nostdlib -fno-stack-protector -fno-pic -mno-red-zone -m64
+```
+
+No target binary links libc.
+
+## Runtime acceptance
+
+With `qemu-system-x86_64` and `timeout` available:
+
+```sh
+make runtime-test
+```
+
+The target emits exactly `LM64\n` on QEMU debugcon. The Makefile compares that file byte-for-byte and rejects a QEMU log containing `triple fault`.
+
+Expected final line:
+
+```text
+M2_RUNTIME_PASS
+```
+
+For the visible VGA boot:
+
+```sh
 make run
 ```
 
-Exact QEMU invocation:
-
-```sh
-qemu-system-x86_64 \
-  -machine pc,accel=tcg \
-  -m 64M \
-  -drive format=raw,file=build/hadeed.img,if=ide,index=0,media=disk \
-  -boot c \
-  -no-reboot -no-shutdown
-```
-
-Expected M1 VGA output:
+The screen contains:
 
 ```text
-                                    HADEED
+HADEED64
 ```
 
 ## Layout
 
 ```text
-boot/bootloader.asm   512-byte MBR source
-kernel/entry.asm      M2 64-bit entry skeleton
-kernel/main.c         M2 freestanding VGA C skeleton
-kernel/linker.ld      Kernel physical placement at 1 MiB
-docs/boot_flow.md     BIOS-to-shell flow and disk/header convention
-docs/decisions.md     IA-32e, paging, allocator, syscall choices
-docs/milestones.md    M1–M5 acceptance tests and two-week plan
-scripts/run-qemu.sh   Raw image QEMU command
+boot/bootloader.asm    BIOS sector-0 loader
+boot/stage1.asm        A20 + paging + IA-32e transition + kernel copy
+kernel/entry.asm       64-bit kernel entry
+kernel/main.c          VGA/debugcon M2 payload
+kernel/linker.ld       physical link address 0x00100000
+tests/m2_image_test.c  freestanding static acceptance binary
+tests/host_linker.ld   no-libc host-test link layout
+scripts/run-qemu.sh    visible QEMU launch
 ```
-
-## Decisions
-
-- Real mode directly into IA-32e: PAE + LME + PML4 + CR0.PG, then far jump.
-- 2 MiB identity bootstrap mapping plus 4 KiB mapped higher-half heap pages.
-- Bitmap-backed physical buddy allocator before any slab layer.
-- `syscall`/`sysret` for future ring-3 ABI; shell commands are direct kernel calls.
-
-See the corresponding documents under `docs/`.
 
 ## License
 
