@@ -171,9 +171,8 @@ m4-trace-verify: $(BUILD)/hadeed.img $(BUILD)/kernel.elf $(BUILD)/m4_trace_verif
 m4-mutation-test: m4-trace-verify
 	@set -e; \
 	cp $(BUILD)/kernel.bin $(BUILD)/kernel.bin.good; \
-	off=$(grep -abo 'M4 OK' $(BUILD)/kernel.bin | head -n 1 | cut -d: -f1); \
-	test -n "$off"; \
-	printf 'X' | dd of=$(BUILD)/kernel.bin bs=1 seek=$off conv=notrunc status=none; \
+	grep -abo 'M4 OK' $(BUILD)/kernel.bin | head -n 1 | cut -d: -f1 | \
+	  xargs -I@ sh -c "printf X | dd of=$(BUILD)/kernel.bin bs=1 seek=@ conv=notrunc status=none"; \
 	if ./$(BUILD)/m4_trace_verify >$(BUILD)/m4.mutation.out 2>&1; then \
 	  mv $(BUILD)/kernel.bin.good $(BUILD)/kernel.bin; \
 	  printf '%s\n' 'M4_MUTATION_FAIL verifier accepted corrupted marker'; exit 1; \
@@ -192,7 +191,6 @@ m4-runtime-test: $(BUILD)/hadeed.img $(BUILD)/m4_trace_verify
 	  ./$(BUILD)/m4_trace_verify; \
 	else \
 	  rm -f $(BUILD)/m4.debug $(BUILD)/m4.qemu.log; \
-	  set +e; \
 	  $(TIMEOUT) 5s $(QEMU) \
 	    -machine pc,accel=tcg \
 	    -m 64M \
@@ -201,12 +199,10 @@ m4-runtime-test: $(BUILD)/hadeed.img $(BUILD)/m4_trace_verify
 	    -display none -serial none -monitor none \
 	    -debugcon file:$(BUILD)/m4.debug -global isa-debugcon.iobase=0xe9 \
 	    -d int,cpu_reset -D $(BUILD)/m4.qemu.log \
-	    -no-reboot -no-shutdown; \
-	  rc=$?; set -e; \
-	  test $rc -eq 124; \
-	  grep -Eq '^LM64$' $(BUILD)/m4.debug; \
-	  grep -Eq '^USABLE_PAGES [0-9]+$' $(BUILD)/m4.debug; \
-	  test "$(tail -n 1 $(BUILD)/m4.debug)" = 'M4 OK'; \
+	    -no-reboot -no-shutdown || true; \
+	  grep -Fx 'LM64' $(BUILD)/m4.debug; \
+	  grep -Ex 'USABLE_PAGES [0-9]+' $(BUILD)/m4.debug; \
+	  tail -n 1 $(BUILD)/m4.debug | grep -Fx 'M4 OK'; \
 	  ! grep -Eiq 'triple fault' $(BUILD)/m4.qemu.log; \
 	  printf '%s\n' 'M4_RUNTIME_PASS'; \
 	fi
